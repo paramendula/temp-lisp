@@ -150,10 +150,11 @@ int tl_stack_push(struct tl_state *s, tl_obj_ptr obj) {
 }
 
 #define _tl_cis_ident_start(ch)                                                \
-  (isalpha(ch) || ((ch) == '_') || ((ch) == '@') || ((ch) == '!') ||           \
-   ((ch) == '~') || ((ch) == '$') || ((ch) == '%') || ((ch) == '^') ||         \
-   ((ch) == ':') || ((ch) == '/') || ((ch) == '?') || ((ch) == '&') ||         \
-   ((ch) == '*') || ((ch) == '=') || ((ch) == '<') || ((ch) == '>'))
+  (isalpha(ch) || ((ch) == '_') || ((ch) == '!') || ((ch) == '~') ||           \
+   ((ch) == '$') || ((ch) == '%') || ((ch) == '^') || ((ch) == ':') ||         \
+   ((ch) == '/') || ((ch) == '?') || ((ch) == '&') || ((ch) == '*') ||         \
+   ((ch) == '=') || ((ch) == '<') || ((ch) == '>') || ((ch) == '+') ||         \
+   ((ch) == '-'))
 
 #define _tl_cis_ident(ch) (_tl_cis_ident_start(ch) || isdigit(ch))
 
@@ -201,6 +202,25 @@ int _tl_obj_free(struct tl_state *s, tl_obj_ptr obj, char free_node_insides) {
   return 0;
 }
 
+tl_obj_ptr _tl_str_from_c(struct tl_state *s, const char *str, size_t len) {
+
+  tl_str *tstr = s->alloc_vt->alloc(s->alloc, tlatStrStruct, sizeof(tl_str));
+  if (!tstr) {
+    return tlNil;
+  }
+  char *raw = s->alloc_vt->alloc(s->alloc, tlatStrRaw, (unsigned long)len);
+  if (!raw) {
+    s->alloc_vt->free(s->alloc, tlatStrStruct, tstr);
+    return tlNil;
+  }
+
+  memcpy(raw, str, len);
+  tstr->len = len;
+  tstr->raw = raw;
+
+  return (tl_obj_ptr){.t = tltString, .str = tstr};
+}
+
 int tl_gc_register(struct tl_state *s, tl_obj_ptr obj) { return 0; }
 
 int tl_gc_unregister(struct tl_state *s, tl_obj_ptr obj) { return 0; }
@@ -208,6 +228,7 @@ int tl_gc_unregister(struct tl_state *s, tl_obj_ptr obj) { return 0; }
 int tl_read_raw(struct tl_state *s, const char *str, size_t len,
                 size_t *readen_out) {
   // TODO: line, number indicator in errors
+  // TODO: 'quote, `semiquote, ,unquote; ,@splice-unquote
   tl_node *nodes[64]; // TODO: fix nodes parse depth, temp solution
   char buf[128];      // TODO: fix numbers parsing, temp solution
 
@@ -297,7 +318,7 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
 
   label_iteration: // for finishing
     switch (flag) {
-    case _tlr_sym: // Symbol
+    case _tlr_sym: { // Symbol
       if (_tl_cis_ident(ch)) {
         continue;
       } else if (ch == '.') {
@@ -308,12 +329,74 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
         }
         continue;
       }
+      if (str[i - 1] == '.') { // if symbol ends with '.' (wrong)
+        tl_dlog("tl_read_raw met a symbol ending with a '.'");
+        goto on_fatal;
+      }
       // TODO: invalid symbol
+      // TODO: can symbol non-first parts start with a digit?
       // str[temp:i] is a Symbol
+
+      // allocate symbol struct, then allocate tl_str for each part
+      tl_symbol *sym =
+          s->alloc_vt->alloc(s->alloc, tlatSymStruct, sizeof(*sym));
+      if (!sym) {
+        goto on_nem;
+      }
+
+      tl_symbol *sym_last = sym;
+
+      int start = temp, cur = temp + 1;
+
+      char sym_empty = 1;
+
+      // TODO: check gc for strings (symbol)
+      while (start != i) {
+        ch = str[cur];
+        if ((ch == '.') || (!_tl_cis_ident(ch))) {
+          tl_obj_ptr part = _tl_str_from_c(s, str + start, cur - start);
+          if (part.t == tltNil) {
+            _tl_obj_free(s, (tl_obj_ptr){.t = tltSymbol, .sym = sym}, 1);
+            goto on_nem;
+          }
+          if (sym_empty) {
+            sym_empty = 0;
+          } else {
+            tl_symbol *new_sym =
+                s->alloc_vt->alloc(s->alloc, tlatSymStruct, sizeof(*sym));
+            if (!new_sym) {
+              _tl_obj_free(s, (tl_obj_ptr){.t = tltSymbol, .sym = sym}, 1);
+              _tl_obj_free(s, part, 1);
+              goto on_nem;
+            }
+            sym_last->next = new_sym;
+            sym_last = new_sym;
+          }
+          sym_last->part = part.str;
+
+          if (ch != '.') {
+            sym_last->next = NULL;
+            break;
+          }
+
+          start = cur + 1;
+          cur = start + 1;
+          continue;
+        }
+        cur += 1;
+      }
+
       flag = 0;
-      // TODO: allocate a symbol
+      allocated = 1;
+      append = 1;
+      i--;
+
+      to_append = (tl_obj_ptr){.t = tltSymbol, .sym = sym};
+
       continue;
+    }
     case _tlr_str: { // String
+      // TODO: escape sequences
       if (ch != '"')
         continue;
       // str[temp:i] is a String contents
@@ -330,27 +413,17 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
 
       // TODO: gc check for existing strings
 
-      tl_str *tstr =
-          s->alloc_vt->alloc(s->alloc, tlatStrStruct, sizeof(tl_str));
-      if (!tstr) {
+      to_append = _tl_str_from_c(s, str + temp, len);
+
+      if (to_append.t == tltNil) {
         goto on_nem;
       }
-      char *raw = s->alloc_vt->alloc(s->alloc, tlatStrRaw, (unsigned long)len);
-      if (!raw) {
-        s->alloc_vt->free(s->alloc, tlatStrStruct, tstr);
-        goto on_nem;
-      }
-
-      memcpy(raw, str + temp, len);
-      tstr->len = len;
-      tstr->raw = raw;
-
-      to_append = (tl_obj_ptr){.t = tltString, .str = tstr};
 
       continue;
     }
     case _tlr_lit: {
-      // TODO: char parse
+      // TODO: ascii char parse
+      // TODO: all(unicode) char parse
       if (isalpha(ch))
         continue;
       flag = 0;
@@ -385,12 +458,13 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
       flag = 0;
       continue;
     case _tlr_nos:
-      if ((ch == ' ') || _tl_cis_ident(ch)) {
-        flag = _tlr_sym;
+      // TODO: can symbol start with +<digit> or -<digit> ?
+      if (isdigit(ch)) {
+        flag = _tlr_num;
         i--;
         continue;
-      } else if (isdigit(ch)) {
-        flag = _tlr_num;
+      } else if (isspace(ch) || _tl_cis_ident(ch)) {
+        flag = _tlr_sym;
         i--;
         continue;
       }
@@ -399,6 +473,7 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
       continue;
     case _tlr_num: {
       // TODO: unsinged integer read
+      // TODO: other forms
       if (isdigit(ch))
         continue;
       if (ch == '.') {
@@ -409,6 +484,10 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
         }
         real = 1;
         continue;
+      } else if (_tl_cis_ident(ch)) {
+        tl_dlog("tl_read_raw met an attempt to make symbol starting with a "
+                "+<digit> or -<digit>");
+        goto on_fatal;
       }
       int len = i - temp;
       // TODO: temp fix numbers

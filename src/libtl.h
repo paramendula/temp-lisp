@@ -61,6 +61,7 @@ typedef enum tl_alloc_type {
   tlatNode,
   tlatStrRaw,
   tlatStrStruct,
+  tlatSymStruct,
 } tl_alloc_type;
 
 typedef struct tl_func {
@@ -91,7 +92,8 @@ typedef struct tl_node {
   tl_obj_ptr head, tail;
 } tl_node;
 
-// free and destroy may be NULL
+// This is an allocator VT with metadata (allocation types)
+// free() and destroy() may be NULL
 // Rules:
 // if both are NULL, then set the TL_FLAG_ALLOC_FNN flag (freeing memory isn't
 // needed)
@@ -123,7 +125,7 @@ typedef struct tl_state {
   int flags;
 
   tl_gc gc;
-  void *alloc;
+  void *alloc; // allocator ptr
   const tl_alloc_vt *alloc_vt;
 
   unsigned int stack_size, stack_cur;

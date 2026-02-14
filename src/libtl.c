@@ -4,6 +4,7 @@
 #include <string.h>
 
 #if TL_DEBUG != 0 && TL_DEBUG_LOG != 0
+#include "libtlaux.h"
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -605,6 +606,11 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
         to_append = (tl_obj_ptr){.t = tltNode, .node = node_top};
         allocated = 1;
         append = 1;
+        /* if (node_top->head.t == tltNil) { */
+        /*   tl_dlog("tl_read_raw met a '()' (empty list), which is
+         * prohibited"); */
+        /*   goto on_fatal; */
+        /* } */
       } else {
         node_cur = nodes[depth - 1];
         tailed = ((node_cur->tail.t != tltNil) ? 2 : 0);
@@ -674,4 +680,32 @@ on_fatal:
     _tl_obj_free(s, (tl_obj_ptr){.t = tltNode, .node = node_top}, 1);
   }
   return -1;
+}
+
+inline static int _tl_eval_node(struct tl_state *s, tl_node *node,
+                                tl_obj_ptr *ret) {
+  return 0;
+}
+
+int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
+  switch (obj.t) {
+    // Constants(literals) evaluate to themselves
+  case tltNil:
+  case tltBool:
+  case tltChar:
+  case tltInteger:
+  case tltUInteger:
+  case tltDouble:
+  case tltString:
+    if (ret)
+      *ret = obj;
+    break;
+  case tltNode:
+    return _tl_eval_node(s, obj.node, ret);
+  default:
+    tl_dlog("tl_eval raw met an attempt to evaluate a %s",
+            tlaux_type_to_str(obj.t));
+    return -1;
+  }
+  return 0;
 }

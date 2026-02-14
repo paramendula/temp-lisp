@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "libtlht.h"
+
 #define TL_DEBUG 1
 #define TL_DEBUG_LOG 1
 #define TL_DEBUG_STACK 1
@@ -51,7 +53,9 @@ typedef enum tl_obj_type {
   tltUInteger,
   tltDouble, // ^ these three are all a Number
   tltFunction,
+  tltMacro,
   tltUserFunction,
+  tltUserMacro,
   tltUserPointer,
 } tl_obj_type;
 
@@ -59,9 +63,10 @@ typedef enum tl_obj_type {
 typedef enum tl_alloc_type {
   tlatStack,
   tlatNode,
-  tlatStrRaw,
   tlatStrStruct,
+  tlatStrRaw,
   tlatSymStruct,
+  tlatEnvStruct,
 } tl_alloc_type;
 
 typedef struct tl_func {
@@ -69,7 +74,13 @@ typedef struct tl_func {
   // TODO: func code
 } tl_func;
 
-typedef void(tl_user_func)(struct tl_state *);
+// always used as *tl_user_func
+typedef void(tl_user_func)(struct tl_state *, struct tl_env *);
+
+typedef struct tl_ufunc_wrap {
+  struct tl_env *env;
+  tl_user_func *ufunc;
+} tl_ufunc_wrap;
 
 typedef struct tl_obj_ptr {
   tl_obj_type t;
@@ -82,8 +93,8 @@ typedef struct tl_obj_ptr {
     intmax_t intg;
     uintmax_t uintg;
     double dbl;
-    tl_func *func;
-    tl_user_func *user_func;
+    tl_func *func, *macro;
+    tl_ufunc_wrap *user_func, *user_macro;
     void *user_ptr;
   };
 } tl_obj_ptr;
@@ -91,6 +102,19 @@ typedef struct tl_obj_ptr {
 typedef struct tl_node {
   tl_obj_ptr head, tail;
 } tl_node;
+
+typedef struct tl_env_bucket {
+  unsigned long hash;
+  struct tl_env_bucket *prev, *next, *next_col;
+  tl_symbol *key;
+  tl_obj_ptr value;
+} tl_env_bucket;
+
+typedef struct tl_env {
+  unsigned long len, cap;
+  struct tl_env_bucket **buckets, *first;
+  struct tl_env *prev; // parent environment
+} tl_env;
 
 // This is an allocator VT with metadata (allocation types)
 // free() and destroy() may be NULL
@@ -117,10 +141,6 @@ typedef struct tl_gc {
   int pass;
 } tl_gc;
 
-typedef struct tl_env {
-  struct tl_env *prev; // parent environment
-} tl_env;
-
 typedef struct tl_state {
   int flags;
 
@@ -139,14 +159,18 @@ int tl_init(struct tl_state *, tl_init_opts *opts);
 // Deinitialize TL, freeing all memory (if possible)
 int tl_destroy(struct tl_state *);
 
+// TODO: are non-raw function variants needed?
+
 // Read(parse) the first object of the UTF-8 string 'str' of length 'len'
 // and push it to the top of the stack. If readen_out != NULL, put the
 // amount of readen characters into it.
 int tl_read_raw(struct tl_state *, const char *str, size_t len,
                 size_t *readen_out);
+// Evaluate 'obj' into 'ret'
+int tl_eval_raw(struct tl_state *, tl_obj_ptr obj, tl_obj_ptr *ret);
 // Pop the top stack string and read(parse) it using tl_read_raw
 int tl_read(struct tl_state *);
-// Pop the top stack object and evaluate it
+// Pop the top stack object and evaluate it using tl_eval_raw
 int tl_eval(struct tl_state *);
 
 int tl_run_func(struct tl_state *, tl_func *func);
@@ -166,6 +190,7 @@ int tl_gc_mark(struct tl_state *);
 // Free all inaccessible objects and remove them from GC
 int tl_gc_sweep(struct tl_state *);
 
+// Constants
 extern tl_obj_ptr tlNil;
 extern tl_obj_ptr tlTrue;
 extern tl_obj_ptr tlFalse;

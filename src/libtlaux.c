@@ -35,8 +35,12 @@ const char *tlaux_type_to_str(tl_obj_type t) {
     return "UPtr";
   case tltUserFunction:
     return "UFunc";
+  case tltUserMacro:
+    return "UMacro";
   case tltFunction:
     return "Func";
+  case tltMacro:
+    return "Macro";
   case tltNil:
     return "Nil";
   case tltDouble:
@@ -82,8 +86,14 @@ int _tlaux_print_obj(tl_obj_ptr obj, int ident, FILE *stream, char top) {
   case tltUserFunction:
     fprintf(stream, "<UFunc %p>", obj.user_func);
     break;
+  case tltUserMacro:
+    fprintf(stream, "<UMacro %p>", obj.user_macro);
+    break;
   case tltFunction:
     fprintf(stream, "<Func %p>", obj.func);
+    break;
+  case tltMacro:
+    fprintf(stream, "<Macro %p>", obj.macro);
     break;
   case tltNil:
     fprintf(stream, "#nil");

@@ -112,7 +112,7 @@ typedef struct tl_env_bucket {
 
 typedef struct tl_env {
   unsigned long len, cap;
-  struct tl_env_bucket **buckets, *first;
+  struct tl_env_bucket **buckets, *last;
   struct tl_env *prev; // parent environment
 } tl_env;
 

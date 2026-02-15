@@ -103,6 +103,7 @@ int _tlaux_print_obj(tl_obj_ptr obj, int ident, FILE *stream, char top) {
     break;
   case tltNode: {
     // TODO: make printing nodes not stack-dependent
+    // TODO: pretty print lists (currently ignores ident)
     fputc('(', stream);
     for (tl_node *n = obj.node;;) {
       _tlaux_print_obj(n->head, ident + 2, stream, 0);
@@ -123,7 +124,8 @@ int _tlaux_print_obj(tl_obj_ptr obj, int ident, FILE *stream, char top) {
     break;
   }
   case tltString:
-    // TODO: proper raw str print
+    // TODO: proper raw str print (with escape chars and possible newlines for
+    // prettiness)
     fputc('"', stream);
     if (obj.str)
       fwrite(obj.str->raw, 1, obj.str->len, stream);

@@ -12,7 +12,7 @@ typedef struct tlht_bucket {
   struct tlht_bucket *prev, *next, *next_col;
 } tlht_bucket;
 
-// 0 if equal (usually keys), any other value if not equal
+// 0 if equivalent, any other value if not
 typedef int(tlht_cmp_func)(tlht_bucket *lhs, tlht_bucket *rhs);
 
 typedef tlht_bucket **(tlht_alloc_func)(void *allocator, unsigned long new_cap);
@@ -26,10 +26,9 @@ typedef struct tl_ht {
 // == 0), the equivalent is replaced and sent to '*rep_out' (if it's not NULL)
 int tlht_insert(tl_ht *, tlht_bucket *bucket, tlht_cmp_func *cmp,
                 tlht_bucket **out);
-// Remove bucket from ht, cmp(search_bucket, bucket), where bucket is the actual
-// bucket, must be 0, along with equivalence of hashes. Returns -1 if no
-// equivalent bucket was found. Also if 'out' isn't NULL, sets '*out' to the
-// found bucket.
+// Remove bucket from ht, cmp(search_bucket, bucket) must be 0 and hashes equal,
+// where bucket is the actual bucket. Returns -1 if no equivalent bucket was
+// found. Also if 'out' isn't NULL, sets '*out' to the found bucket.
 int tlht_remove(tl_ht *, tlht_bucket *search_bucket, tlht_cmp_func *cmp,
                 tlht_bucket **out);
 // Works just like tlht_remove, but without actually removing the bucket...
@@ -51,12 +50,12 @@ int tlht_get(tl_ht *, tlht_bucket *search_bucket, tlht_cmp_func *cmp,
 // it. It must always be > 1.0.
 // 2.0 is a good factor for general usage. If
 // factor < 2.0, then you must ensure ht cap is big enough that ((unsigned
-// long)(((double)cap) * factor) > cap, to prevent infinite loop
+// long)(((double)cap) * factor)) > cap, to prevent infinite loops
 //
 //
 // Returns -1 if something's wrong with ratios or the factor (check libtlht.c)
 // Returns -2 if there is an allocation error (alloc() NULL or alloc() returned
-// not 0)
+// NULL)
 // TODO: factor constraints, etc.
 int tlht_fit(tl_ht *, double ratio_lower, double ratio_upper, double factor,
              void *allocator, tlht_alloc_func *alloc);

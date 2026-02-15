@@ -21,6 +21,7 @@ int main(int argc, char **argv) {
   size_t readen = 0;
   size_t cur;
 
+  tl_obj_ptr obj, ret;
   while (1) {
     fputs("/>", stdout);
     fgets(buffer, sizeof(buffer) - 1, stdin);
@@ -34,6 +35,28 @@ int main(int argc, char **argv) {
         break;
       }
       cur += readen;
+
+      if (!tls.stack_cur) {
+        continue;
+      }
+
+      if (tl_stack_pop(&tls, &obj)) {
+        printf("Pop error.\n");
+        break;
+      }
+
+      printf("Evaluating:\n");
+      // TODO: see from libtl.h, about raw variants and GC!! TODO asap
+      if (tl_eval_raw(&tls, obj, &ret)) {
+        printf("Eval error.\n");
+        break;
+      }
+
+      if (ret.t != tltNil) {
+        tlaux_print_obj(ret, 2, stdout);
+        putc('\n', stdout);
+        ret.t = tltNil;
+      }
     }
     printf("Stack: %u/%u\n", tls.stack_cur, tls.stack_size);
   }

@@ -9,6 +9,7 @@
 extern const tl_alloc_vt TLAUX_C_ALLOCATOR_VT;
 
 const char *tlaux_type_to_str(tl_obj_type t);
+
 int tlaux_print_obj(tl_obj_ptr obj, int ident, FILE *stream);
 
 #endif

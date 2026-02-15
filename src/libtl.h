@@ -5,6 +5,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Project-wide TODO
+// TODO: use uniform 'cell' instead of unsigned ints or unsigned longs
+// ^ typedef uintmax_t cell;
+// TODO: refactor all struct names and functions
+// TODO: error handling
+
 #include "libtlht.h"
 
 #define TL_DEBUG 1
@@ -160,6 +166,8 @@ int tl_init(struct tl_state *, tl_init_opts *opts);
 int tl_destroy(struct tl_state *);
 
 // TODO: are non-raw function variants needed?
+// ^ maybe raw variants DON'T interact with GC!
+// if so, TODO: remove GC interacts from raw variants
 
 // Read(parse) the first object of the UTF-8 string 'str' of length 'len'
 // and push it to the top of the stack. If readen_out != NULL, put the
@@ -189,6 +197,8 @@ int tl_gc_unregister(struct tl_state *, tl_obj_ptr obj);
 int tl_gc_mark(struct tl_state *);
 // Free all inaccessible objects and remove them from GC
 int tl_gc_sweep(struct tl_state *);
+
+// TODO: tl_env functions
 
 // Constants
 extern tl_obj_ptr tlNil;

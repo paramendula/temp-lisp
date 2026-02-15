@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+// TODO: divide into separate files (modularity)
+
 #if TL_DEBUG != 0 && TL_DEBUG_LOG != 0
 #include "libtlaux.h"
 #include <stdarg.h>
@@ -113,6 +115,16 @@ int tl_stack_pop(struct tl_state *s, tl_obj_ptr *ret) {
   }
 
   s->stack_cur -= 1;
+
+#if TL_DEBUG != 0 && TL_DEBUG_STACK != 0
+  tl_obj_ptr obj = s->stack[s->stack_cur];
+  tl_dlog("Popped %s [%u/%u]:", tlaux_type_to_str(obj.t), s->stack_cur,
+          s->stack_size);
+  tlaux_print_obj(obj, 2, stderr);
+  fputc('\n', stderr);
+  tl_dlog("--");
+#endif
+
   *ret = s->stack[s->stack_cur];
 
   return 0;
@@ -226,6 +238,10 @@ int tl_gc_register(struct tl_state *s, tl_obj_ptr obj) { return 0; }
 
 int tl_gc_unregister(struct tl_state *s, tl_obj_ptr obj) { return 0; }
 
+// TODO: 1) divide into separate functions
+// TODO: 2) refactor into recursive descent
+// TODO: 2.5) maybe token parsing first?
+// TODO: 3) syntax extensibility from outside (C) and inside (TL)
 int tl_read_raw(struct tl_state *s, const char *str, size_t len,
                 size_t *readen_out) {
   // TODO: line, number indicator in errors
@@ -682,6 +698,10 @@ on_fatal:
   return -1;
 }
 
+int tl_read(struct tl_state *s) { return 0; }
+
+// Two actual forms: function run, macro run
+// All 'special forms' are macro runs (usually user functions)
 inline static int _tl_eval_node(struct tl_state *s, tl_node *node,
                                 tl_obj_ptr *ret) {
   return 0;
@@ -709,3 +729,5 @@ int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
   }
   return 0;
 }
+
+int tl_eval(struct tl_state *s) { return 0; }

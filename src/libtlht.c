@@ -151,7 +151,7 @@ int tlht_fit(tl_ht *ht, double ratio_lower, double ratio_upper, double factor,
   unsigned long new_cap = temp_cap;
   double temp_ratio = ratio;
 
-  if (factor == 0.0 || factor == 1.0)
+  if (factor <= 1.0)
     return -1;
 
   if (ratio < ratio_lower) {

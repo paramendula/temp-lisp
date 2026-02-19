@@ -31,7 +31,7 @@ int tlht_insert(tl_ht *, tlht_bucket *bucket, tlht_cmp_func *cmp,
 // found. Also if 'out' isn't NULL, sets '*out' to the found bucket.
 int tlht_remove(tl_ht *, tlht_bucket *search_bucket, tlht_cmp_func *cmp,
                 tlht_bucket **out);
-// Works just like tlht_remove, but without actually removing the bucket...
+// Searches for an equivalent bucket, and set *out to the finding or NULL
 int tlht_get(tl_ht *, tlht_bucket *search_bucket, tlht_cmp_func *cmp,
              tlht_bucket **out);
 

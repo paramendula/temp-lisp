@@ -9,7 +9,8 @@
 // TODO: use uniform 'cell' instead of unsigned ints or unsigned longs
 // ^ typedef uintmax_t cell;
 // TODO: refactor all struct names and functions
-// TODO: error handling
+// TODO: error handling (raise?)
+// TODO: divide into separate files (modularity)
 
 #include "libtlht.h"
 
@@ -63,6 +64,7 @@ typedef enum tl_obj_type {
   tltUserFunction,
   tltUserMacro,
   tltUserPointer,
+  tltTable,
 } tl_obj_type;
 
 // type of allocation
@@ -73,6 +75,11 @@ typedef enum tl_alloc_type {
   tlatStrRaw,
   tlatSymStruct,
   tlatEnvStruct,
+  tlatEnvBuckArr,
+  tlatEnvBucket,
+  tlatHtStruct,
+  tlatHtBucket,
+  tlatHtBuckArr,
 } tl_alloc_type;
 
 typedef struct tl_func {
@@ -113,7 +120,7 @@ typedef struct tl_env_bucket {
   unsigned long hash;
   struct tl_env_bucket *prev, *next, *next_col;
   tl_symbol *key;
-  tl_obj_ptr value;
+  tl_obj_ptr val;
 } tl_env_bucket;
 
 typedef struct tl_env {
@@ -121,6 +128,17 @@ typedef struct tl_env {
   struct tl_env_bucket **buckets, *last;
   struct tl_env *prev; // parent environment
 } tl_env;
+
+typedef struct tl_table_bucket {
+  unsigned long hash;
+  struct tl_table_bucket *prev, *next, *next_col;
+  tl_obj_ptr key, val;
+} tl_table_bucket;
+
+typedef struct tl_table {
+  unsigned long len, cap;
+  struct tl_table_bucket **buckets, *last;
+} tl_table;
 
 // This is an allocator VT with metadata (allocation types)
 // free() and destroy() may be NULL
@@ -191,14 +209,34 @@ int tl_stack_push(struct tl_state *, tl_obj_ptr obj);
 
 // Insert an object pointer into GC, making it managed memory
 int tl_gc_register(struct tl_state *, tl_obj_ptr obj);
-// Remove an object from GC, stopping it from being managed memory
+// Remove an object from GC, stopping it from being managed memory.
+// If obj isn't gc registered, the function does nothing.
 int tl_gc_unregister(struct tl_state *, tl_obj_ptr obj);
-// Mark all inaccessible objects (from the top env and stack)
-int tl_gc_mark(struct tl_state *);
+// Mark all inaccessible objects (starting from 'env' ending with top env)
+int tl_gc_mark(struct tl_state *, struct tl_env *env);
 // Free all inaccessible objects and remove them from GC
 int tl_gc_sweep(struct tl_state *);
 
-// TODO: tl_env functions
+// TODO: tl_env_* description
+
+// gc register obj before calling this func
+int tl_env_insert(struct tl_state *, struct tl_env *, tl_symbol *key,
+                  tl_obj_ptr val, tl_env_bucket **out);
+int tl_env_remove(struct tl_state *, struct tl_env *, tl_symbol *key,
+                  tl_env_bucket **out);
+int tl_env_get(struct tl_state *, struct tl_env *, tl_symbol *key,
+               tl_env_bucket **out);
+int tl_env_set(struct tl_state *, struct tl_env *, tl_symbol *key,
+               tl_obj_ptr val, tl_obj_ptr *out);
+
+// TODO: tl_table_* description
+
+int tl_table_insert(struct tl_state *, struct tl_table *, tl_obj_ptr key,
+                    tl_obj_ptr val, tl_table_bucket **out);
+int tl_table_remove(struct tl_state *, struct tl_table *, tl_obj_ptr key,
+                    tl_table_bucket **out);
+int tl_table_get(struct tl_state *, struct tl_table *, tl_obj_ptr key,
+                 tl_table_bucket **out);
 
 // Constants
 extern tl_obj_ptr tlNil;

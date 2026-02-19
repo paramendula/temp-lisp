@@ -3,8 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// TODO: divide into separate files (modularity)
-
 #if TL_DEBUG != 0 && TL_DEBUG_LOG != 0
 #include "libtlaux.h"
 #include <stdarg.h>
@@ -707,6 +705,12 @@ inline static int _tl_eval_node(struct tl_state *s, tl_node *node,
   return 0;
 }
 
+inline static int _tl_eval_sym(struct tl_state *s, tl_symbol *sym,
+                               tl_obj_ptr *ret) {
+  return 0;
+}
+
+// TODO: make not C-stack dependent
 int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
   switch (obj.t) {
     // Constants(literals) evaluate to themselves
@@ -722,6 +726,8 @@ int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
     break;
   case tltNode:
     return _tl_eval_node(s, obj.node, ret);
+  case tltSymbol:
+    return _tl_eval_sym(s, obj.sym, ret);
   default:
     tl_dlog("tl_eval raw met an attempt to evaluate a %s",
             tlaux_type_to_str(obj.t));
@@ -731,3 +737,99 @@ int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
 }
 
 int tl_eval(struct tl_state *s) { return 0; }
+
+// Jenkin's one_at_a_time (Bob Jenkins)
+unsigned long _tl_hash_func(const char *cstr, unsigned long len) {
+  unsigned long hash = 0;
+  for (unsigned long i = 0; i < len; i++) {
+    hash += cstr[i];
+    hash += hash << 10;
+    hash ^= hash >> 6;
+  }
+  hash += hash << 3;
+  hash ^= hash >> 11;
+  hash += hash << 15;
+  return hash;
+}
+
+int _tl_env_cmp(tl_env_bucket *b1, tl_env_bucket *b2) {
+  tl_str *s1 = b1->key->part;
+  tl_str *s2 = b2->key->part;
+  return (s1->len != s2->len) || (memcmp(s1->raw, s2->raw, s1->len));
+}
+
+int tl_env_insert(struct tl_state *s, struct tl_env *e, tl_symbol *key,
+                  tl_obj_ptr val, tl_env_bucket **out) {
+  if (key->next) {
+    tl_dlog("tl_env_insert: tl_env can't accept multipart symbols (key->next "
+            "!= NULL)");
+    return -1;
+  }
+  unsigned long hash = _tl_hash_func(key->part->raw, key->part->len);
+  tl_env_bucket *to_out = NULL;
+
+  // Optimization: no need to allocate a new bucket
+  if (!out) {
+    tl_env_bucket search_bucket = (tl_env_bucket){.hash = hash, .key = key};
+
+    tlht_get((tl_ht *)e, (tlht_bucket *)&search_bucket,
+             (tlht_cmp_func *)_tl_env_cmp, (tlht_bucket **)&to_out);
+
+    if (to_out) { // if an equivalent bucket is found, just replace the value
+      if (tl_gc_unregister(s, to_out->val)) {
+        tl_dlog("tl_env_insert: tl_gc_unregister error");
+        return -3;
+      }
+      to_out->val = val;
+      return 0;
+    }
+  }
+
+  tl_env_bucket *b = s->alloc_vt->alloc(s->alloc, tlatEnvBucket, sizeof(*b));
+
+  if (!b) {
+    tl_dlog("tl_env_insert: NEM");
+    return -2;
+  }
+
+  b->hash = hash;
+  b->key = key;
+  b->val = val;
+
+  if (tlht_insert((tl_ht *)e, (tlht_bucket *)b, (tlht_cmp_func *)_tl_env_cmp,
+                  (tlht_bucket **)out)) {
+    return -1;
+  }
+
+  // TODO: call tlht_fit
+
+  return 0;
+}
+int tl_env_remove(struct tl_state *s, struct tl_env *e, tl_symbol *key,
+                  tl_env_bucket **out) {
+  return 0;
+}
+int tl_env_get(struct tl_state *s, struct tl_env *e, tl_symbol *key,
+               tl_env_bucket **out) {
+  return 0;
+}
+
+int tl_env_set(struct tl_state *s, struct tl_env *e, tl_symbol *key,
+               tl_obj_ptr obj, tl_obj_ptr *out) {
+  return 0;
+}
+
+int tl_table_insert(struct tl_state *s, struct tl_table *e, tl_obj_ptr key,
+                    tl_obj_ptr val, tl_table_bucket **out) {
+  return 0;
+}
+
+int tl_table_remove(struct tl_state *s, struct tl_table *e, tl_obj_ptr key,
+                    tl_table_bucket **out) {
+  return 0;
+}
+
+int tl_table_get(struct tl_state *s, struct tl_table *e, tl_obj_ptr key,
+                 tl_table_bucket **out) {
+  return 0;
+}

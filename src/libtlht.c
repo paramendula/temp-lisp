@@ -118,7 +118,9 @@ int tlht_get(tl_ht *ht, tlht_bucket *bucket, tlht_cmp_func *cmp,
   tlht_bucket *check = lookup;
 
   if (!lookup) {
-    goto not_found;
+    if (out)
+      *out = 0;
+    return 0;
   } else {
     while (check) {
       if ((bucket->hash == check->hash) && !cmp(check, bucket)) { // if found
@@ -133,13 +135,13 @@ int tlht_get(tl_ht *ht, tlht_bucket *bucket, tlht_cmp_func *cmp,
         *out = check;
       }
     } else {
-      goto not_found;
+      if (out)
+        *out = 0;
+      return 0;
     }
   }
 
   return 0;
-not_found:
-  return -1;
 }
 
 // TODO: add more checks, rethink?

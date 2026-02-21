@@ -2,24 +2,24 @@
 
 // TODO: refactor lookup into an internal function (possibly inline)
 
-int tlht_insert(tl_ht *ht, tlht_bucket *search_bucket, tlht_cmp_func *cmp,
+int tlht_insert(tl_ht *ht, tlht_bucket *bucket, tlht_cmp_func *cmp,
                 tlht_bucket **out) {
-  unsigned long local_hash = search_bucket->hash % ht->cap;
+  unsigned long local_hash = bucket->hash % ht->cap;
 
   tlht_bucket *lookup = ht->buckets[local_hash];
   tlht_bucket *check = lookup;
 
   if (!lookup) {
-    ht->buckets[local_hash] = search_bucket;
+    ht->buckets[local_hash] = bucket;
 
-    search_bucket->next_col = 0;
+    bucket->next_col = 0;
   } else {
     // append as a collision
     while (check) {
-      if ((search_bucket->hash == check->hash) &&
+      if ((bucket->hash == check->hash) &&
           !cmp(check,
-               search_bucket)) { // if they are equivalent (key or fully) -
-                                 // replace
+               bucket)) { // if they are equivalent (key or fully) -
+                          // replace
         break;
       }
       lookup = check;
@@ -29,31 +29,49 @@ int tlht_insert(tl_ht *ht, tlht_bucket *search_bucket, tlht_cmp_func *cmp,
     if (check) { // if found equivalent
       if (out) {
         *out = check;
-      }
+      } // else - memory leak
       if (lookup == check) { // if equivalent is first entry
-        ht->buckets[local_hash] = search_bucket;
-        search_bucket->next_col = lookup->next_col;
+        ht->buckets[local_hash] = bucket;
+        bucket->next_col = lookup->next_col;
       } else {
-        lookup->next_col = search_bucket;
-        search_bucket->next_col = check->next_col;
+        lookup->next_col = bucket;
+        bucket->next_col = check->next_col;
       }
+
+      bucket->prev = check->prev;
+      bucket->next = check->next;
+
+      if (bucket->prev) {
+        bucket->prev->next = bucket;
+      }
+
+      if (bucket->next == 0) {
+        ht->last = bucket;
+      } else {
+        bucket->next->prev = bucket;
+      }
+
+      return 0;
     } else { // if new entry
-      lookup->next_col = search_bucket;
-      search_bucket->next_col = 0;
+      if (out) {
+        *out = 0;
+      }
+      lookup->next_col = bucket;
+      bucket->next_col = 0;
     }
   }
 
   // Set 'bucket' as ht->last
 
   if (ht->len++ != 0) {
-    ht->last->next = search_bucket;
-    search_bucket->prev = ht->last;
+    ht->last->next = bucket;
+    bucket->prev = ht->last;
   } else {
-    search_bucket->prev = 0;
+    bucket->prev = 0;
   }
 
-  search_bucket->next = 0;
-  ht->last = search_bucket;
+  bucket->next = 0;
+  ht->last = bucket;
 
   return 0;
 }
@@ -145,8 +163,10 @@ int tlht_get(tl_ht *ht, tlht_bucket *bucket, tlht_cmp_func *cmp,
 }
 
 // TODO: add more checks, rethink?
+// TODO: extensive testing needed and simplification (possibly)
 int tlht_fit(tl_ht *ht, double ratio_lower, double ratio_upper, double factor,
-             void *allocator, tlht_alloc_func *alloc) {
+             void *allocator, tlht_alloc_func *alloc,
+             tlht_bucket ***old_buckets) {
   double ratio = ((double)ht->len) / ht->cap;
 
   unsigned long temp_cap = ht->cap;
@@ -156,6 +176,9 @@ int tlht_fit(tl_ht *ht, double ratio_lower, double ratio_upper, double factor,
   if (factor <= 1.0)
     return -1;
 
+  if (!old_buckets)
+    return -1;
+
   if (ratio < ratio_lower) {
     if (ratio_lower < (double)0.0)
       return -1;
@@ -163,7 +186,12 @@ int tlht_fit(tl_ht *ht, double ratio_lower, double ratio_upper, double factor,
       return -1;
 
     while (temp_ratio < ratio_lower) {
+      unsigned long old_cap = temp_cap;
       temp_cap = (unsigned long)(((double)temp_cap) / factor);
+      if (temp_cap >= old_cap)
+        temp_cap--;
+      if (temp_cap == 0)
+        return -1;
       temp_ratio = ((double)ht->len) / temp_cap;
     }
 
@@ -177,7 +205,12 @@ int tlht_fit(tl_ht *ht, double ratio_lower, double ratio_upper, double factor,
       return -1;
 
     while (temp_ratio > ratio_upper) {
+      unsigned long old_cap = temp_cap;
       temp_cap = (unsigned long)(((double)temp_cap) * factor);
+      if (temp_cap <= old_cap)
+        temp_cap++;
+      if (temp_cap == 0)
+        return -1;
       temp_ratio = ((double)ht->len) / temp_cap;
     }
 
@@ -186,8 +219,10 @@ int tlht_fit(tl_ht *ht, double ratio_lower, double ratio_upper, double factor,
     }
   }
 
-  if (ht->cap == new_cap)
+  if (ht->cap == new_cap) {
+    *old_buckets = 0;
     return 0;
+  }
 
   if (!alloc)
     return -2;
@@ -197,23 +232,15 @@ int tlht_fit(tl_ht *ht, double ratio_lower, double ratio_upper, double factor,
   if (!new_buckets)
     return -2;
 
+  // Insert all buckets
   unsigned long local_hash;
-  tlht_bucket *lookup;
   for (tlht_bucket *b = ht->last; b != 0; b = b->prev) {
     local_hash = b->hash % new_cap;
-    lookup = new_buckets[local_hash];
-
-    if (lookup) {
-      while (lookup->next_col)
-        lookup = lookup->next_col;
-
-      lookup->next_col = b;
-    } else {
-      new_buckets[local_hash] = b;
-    }
-
-    b->next_col = 0;
+    b->next_col = new_buckets[local_hash];
+    new_buckets[local_hash] = b;
   }
+
+  *old_buckets = ht->buckets;
 
   ht->buckets = new_buckets;
   ht->cap = new_cap;

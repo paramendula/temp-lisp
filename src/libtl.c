@@ -1,4 +1,5 @@
 #include "libtl.h"
+#include "libtlht.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -211,6 +212,11 @@ int _tl_obj_free(struct tl_state *s, tl_obj_ptr obj, char free_node_insides) {
     break;
   }
   return 0;
+}
+
+int tl_str_cmp(tl_str *lhs, tl_str *rhs) {
+  return (lhs != rhs) && (lhs->len != rhs->len) &&
+         (memcmp(lhs->raw, rhs->raw, lhs->len));
 }
 
 tl_obj_ptr _tl_str_from_c(struct tl_state *s, const char *str, size_t len) {
@@ -776,7 +782,13 @@ int tl_env_insert(struct tl_state *s, struct tl_env *e, tl_symbol *key,
              (tlht_cmp_func *)_tl_env_cmp, (tlht_bucket **)&to_out);
 
     if (to_out) { // if an equivalent bucket is found, just replace the value
-      if (tl_gc_unregister(s, to_out->val)) {
+      if (to_out->val.t == val.t && to_out->val.user_ptr == val.user_ptr)
+        return 0;
+      return 0;
+      if (tl_gc_unregister(
+              s, to_out->val)) { // does nothing if 'val' isn't registered
+        // ^ we have to call unreg because 'out' is NULL (cant return to the
+        // caller)
         tl_dlog("tl_env_insert: tl_gc_unregister error");
         return -3;
       }
@@ -805,31 +817,226 @@ int tl_env_insert(struct tl_state *s, struct tl_env *e, tl_symbol *key,
 
   return 0;
 }
+
 int tl_env_remove(struct tl_state *s, struct tl_env *e, tl_symbol *key,
                   tl_env_bucket **out) {
-  return 0;
+  unsigned long hash = _tl_hash_func(key->part->raw, key->part->len);
+  tl_env_bucket search_bucket = (tl_env_bucket){.hash = hash, .key = key};
+
+  // TODO: call tlht_fit
+
+  return tlht_remove((tl_ht *)e, (tlht_bucket *)&search_bucket,
+                     (tlht_cmp_func *)_tl_env_cmp, (tlht_bucket **)out);
 }
+
+int tl_env_get_here(struct tl_state *s, struct tl_env *e, tl_symbol *key,
+                    tl_env_bucket **out) {
+  unsigned long hash = _tl_hash_func(key->part->raw, key->part->len);
+  tl_env_bucket search_bucket = (tl_env_bucket){.hash = hash, .key = key};
+
+  return tlht_get((tl_ht *)e, (tlht_bucket *)&search_bucket,
+                  (tlht_cmp_func *)_tl_env_cmp, (tlht_bucket **)out);
+}
+
 int tl_env_get(struct tl_state *s, struct tl_env *e, tl_symbol *key,
                tl_env_bucket **out) {
+  unsigned long hash = _tl_hash_func(key->part->raw, key->part->len);
+  tl_env_bucket search_bucket = (tl_env_bucket){.hash = hash, .key = key};
+
+  tl_env_bucket *local_out = NULL;
+
+  while (e != NULL) {
+    if (tlht_get((tl_ht *)e, (tlht_bucket *)&search_bucket,
+                 (tlht_cmp_func *)_tl_env_cmp, (tlht_bucket **)&local_out)) {
+      tl_dlog("tl_env_get: tlht_get returned non-zero");
+      return -1;
+    }
+
+    if (local_out) { // found
+      if (out) {
+        *out = local_out;
+        return 0;
+      }
+    }
+
+    // go to the parent env
+    e = e->prev;
+  }
+
+  if (out) { // not found
+    *out = NULL;
+  }
   return 0;
 }
 
 int tl_env_set(struct tl_state *s, struct tl_env *e, tl_symbol *key,
                tl_obj_ptr obj, tl_obj_ptr *out) {
+  tl_env_bucket *get_try = NULL;
+
+  if (tl_env_get(s, e, key, &get_try)) {
+    tl_dlog("tl_env_set: tl_env_get returned non-zero");
+    return -1;
+  }
+
+  if (!get_try) { // not found, error
+    return -1;
+  }
+
+  if (out) {
+    *out = get_try->val;
+  } else {
+    if (get_try->val.t == obj.t && get_try->val.user_ptr == obj.user_ptr)
+      return 0;
+    // we have to call it, as 'out' is NULL
+    if (tl_gc_unregister(s, get_try->val)) {
+      tl_dlog("tl_env_set: tl_gc_unregister returned non-zero");
+      return -1;
+    }
+  }
+
+  get_try->val = obj;
+
   return 0;
 }
 
-int tl_table_insert(struct tl_state *s, struct tl_table *e, tl_obj_ptr key,
+unsigned long _tl_table_hash(tl_obj_ptr obj) {
+  switch (obj.t) {
+  case tltString:
+    if (!obj.str)
+      return 0;
+    return _tl_hash_func(obj.str->raw, obj.str->len);
+  case tltSymbol:
+    if (obj.sym->next) {
+      // error
+      // TODO: raise
+      tl_dlog("_tl_table_hash can't hash multipart symbols");
+      return 666;
+    }
+    return _tl_hash_func(obj.sym->part->raw, obj.sym->part->len);
+  case tltChar:
+    return obj.ch;
+  case tltBool:
+    return obj.booln ? 1 : 0;
+  case tltInteger:
+  case tltUInteger: {
+    // https://stackoverflow.com/questions/664014/what-integer-hash-function-are-good-that-accepts-an-integer-hash-key
+    // TODO: differentiate between 32bit and 64 bit (different hashing)
+    unsigned long hash = ((obj.uintg >> 16) ^ obj.uintg) * 0x45d9f3bu;
+    hash = ((hash >> 16) ^ hash) * 0x45d9f3bu;
+    hash = (hash >> 16) ^ hash;
+    return obj.uintg;
+  }
+  default:
+    // error
+    // TODO: raise
+    tl_dlog("_tl_table_hash can't hash %s", tlaux_type_to_str(obj.t));
+    return 666;
+  }
+
+  return 0;
+}
+
+// TODO: move equality check to separate function
+int _tl_table_cmp(tl_obj_ptr lhs, tl_obj_ptr rhs) {
+  if (lhs.t != rhs.t)
+    return 1;
+
+  switch (lhs.t) {
+  case tltString:
+    return tl_str_cmp(lhs.str, rhs.str);
+  case tltSymbol:
+    if (lhs.sym->next || rhs.sym->next) {
+      // error
+      // TODO: raise
+      tl_dlog("_tl_table_cmp can't compare multipart symbols");
+      return 1;
+    }
+    return tl_str_cmp(lhs.sym->part, rhs.sym->part);
+  case tltChar:
+    return lhs.ch != rhs.ch;
+  case tltBool:
+    return lhs.booln != rhs.booln;
+  case tltInteger:
+    return lhs.intg != rhs.intg;
+  case tltUInteger:
+    return lhs.uintg != rhs.uintg;
+  default:
+    // error
+    // TODO: raise
+    tl_dlog("_tl_table_cmp can't compare %s and %s", tlaux_type_to_str(lhs.t),
+            tlaux_type_to_str(rhs.t));
+    return 666;
+  }
+
+  return 0;
+}
+
+int tl_table_insert(struct tl_state *s, struct tl_table *t, tl_obj_ptr key,
                     tl_obj_ptr val, tl_table_bucket **out) {
-  return 0;
+  if (!TL_TABLE_CAN_KEY(key.t)) {
+    tl_dlog("tl_table_insert: %s can't be a table key",
+            tlaux_type_to_str(key.t));
+    return -1;
+  }
+
+  unsigned long hash = _tl_table_hash(key);
+
+  if (!out) {
+    tl_table_bucket *try = NULL;
+    tl_table_bucket search_bucket = (tl_table_bucket){.hash = hash, .key = key};
+
+    if (tlht_get((tl_ht *)t, (tlht_bucket *)&search_bucket,
+                 (tlht_cmp_func *)_tl_table_cmp, (tlht_bucket **)&try)) {
+      tl_dlog("tl_table_insert: tlht_get returned non-zero");
+      return -1;
+    }
+
+    if (try) { // just replace vals
+      if (try->val.t == val.t && try->val.user_ptr == val.user_ptr)
+        return 0;
+      if (tl_gc_unregister(s, try->val)) {
+        tl_dlog("tl_table_insert: tl_gc_unregister returned non-zero");
+        return -1;
+      }
+      try->val = val;
+      return 0;
+    }
+  }
+
+  tl_table_bucket *bucket =
+      s->alloc_vt->alloc(s->alloc, tlatHtBucket, sizeof(*bucket));
+
+  if (!bucket) {
+    tl_dlog("tl_table_insert: NEM");
+    return -2;
+  }
+
+  bucket->hash = hash;
+  bucket->key = key;
+  bucket->val = val;
+
+  // TODO: call tlht_fit
+
+  return tlht_insert((tl_ht *)t, (tlht_bucket *)bucket,
+                     (tlht_cmp_func *)_tl_table_cmp, (tlht_bucket **)out);
 }
 
-int tl_table_remove(struct tl_state *s, struct tl_table *e, tl_obj_ptr key,
+int tl_table_remove(struct tl_state *s, struct tl_table *t, tl_obj_ptr key,
                     tl_table_bucket **out) {
-  return 0;
+  unsigned long hash = _tl_table_hash(key);
+  tl_table_bucket search_bucket = (tl_table_bucket){.hash = hash, .key = key};
+
+  // TODO: call tlht_fit
+
+  return tlht_remove((tl_ht *)t, (tlht_bucket *)&search_bucket,
+                     (tlht_cmp_func *)_tl_table_cmp, (tlht_bucket **)out);
 }
 
-int tl_table_get(struct tl_state *s, struct tl_table *e, tl_obj_ptr key,
+int tl_table_get(struct tl_state *s, struct tl_table *t, tl_obj_ptr key,
                  tl_table_bucket **out) {
-  return 0;
+  unsigned long hash = _tl_table_hash(key);
+  tl_table_bucket search_bucket = (tl_table_bucket){.hash = hash, .key = key};
+
+  return tlht_get((tl_ht *)t, (tlht_bucket *)&search_bucket,
+                  (tlht_cmp_func *)_tl_table_cmp, (tlht_bucket **)out);
 }

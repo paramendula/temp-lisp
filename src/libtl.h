@@ -10,13 +10,21 @@
 // ^ typedef uintmax_t cell;
 // TODO: refactor all struct names and functions
 // TODO: error handling (raise?)
-// TODO: divide into separate files (modularity)
+// TODO: move project-wide TODO to another file...
 
-#include "libtlht.h"
+// TODO: divide libht into separate files (modularity):
+// * libtlread
+// * libtleval
+// * libtlenv
+// * libtltable
+// * libtlexec ??
+// ...
 
+// Config     ---
 #define TL_DEBUG 1
 #define TL_DEBUG_LOG 1
 #define TL_DEBUG_STACK 1
+// Config End ---
 
 // allocator's destroy() frees all its memory (used in tl_destroy)
 // e.g. useful for arena allocators (no need to free() everything manually)
@@ -217,6 +225,9 @@ int tl_gc_mark(struct tl_state *, struct tl_env *env);
 // Free all inaccessible objects and remove them from GC
 int tl_gc_sweep(struct tl_state *);
 
+// returns 0 if equal, both may be NULL
+int tl_str_cmp(tl_str *lhs, tl_str *rhs);
+
 // TODO: tl_env_* description
 
 // gc register obj before calling this func
@@ -226,10 +237,16 @@ int tl_env_remove(struct tl_state *, struct tl_env *, tl_symbol *key,
                   tl_env_bucket **out);
 int tl_env_get(struct tl_state *, struct tl_env *, tl_symbol *key,
                tl_env_bucket **out);
+int tl_env_get_here(struct tl_state *, struct tl_env *, tl_symbol *key,
+                    tl_env_bucket **out);
 int tl_env_set(struct tl_state *, struct tl_env *, tl_symbol *key,
                tl_obj_ptr val, tl_obj_ptr *out);
 
 // TODO: tl_table_* description
+
+#define TL_TABLE_CAN_KEY(t)                                                    \
+  ((t) == tltString || (t) == tltSymbol || (t) == tltChar ||                   \
+   (t) == tltInteger || (t) == tltUInteger || (t) == tltBool)
 
 int tl_table_insert(struct tl_state *, struct tl_table *, tl_obj_ptr key,
                     tl_obj_ptr val, tl_table_bucket **out);

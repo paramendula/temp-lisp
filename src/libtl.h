@@ -78,6 +78,7 @@ typedef enum tl_obj_type {
 // type of allocation
 typedef enum tl_alloc_type {
   tlatStack,
+  tlatRStack,
   tlatNode,
   tlatStrStruct,
   tlatStrRaw,
@@ -90,9 +91,20 @@ typedef enum tl_alloc_type {
   tlatHtBuckArr,
 } tl_alloc_type;
 
+typedef enum tl_bytecode {
+  tlbNop = 0,
+  tlbRet,
+  // TODO: bytecode
+} tl_bytecode;
+
 typedef struct tl_func {
   struct tl_env *env;
-  // TODO: func code
+  char is_bytecode;
+  unsigned long bc_len;
+  union {
+    char *bytecode;
+    struct tl_node *first_node;
+  };
 } tl_func;
 
 // always used as *tl_user_func
@@ -103,6 +115,7 @@ typedef struct tl_ufunc_wrap {
   tl_user_func *ufunc;
 } tl_ufunc_wrap;
 
+// 8 or 16 bytes
 typedef struct tl_obj_ptr {
   tl_obj_type t;
   union {
@@ -114,9 +127,10 @@ typedef struct tl_obj_ptr {
     intmax_t intg;
     uintmax_t uintg;
     double dbl;
-    tl_func *func, *macro;
-    tl_ufunc_wrap *user_func, *user_macro;
+    struct tl_func *func, *macro;
+    struct tl_ufunc_wrap *user_func, *user_macro;
     void *user_ptr;
+    struct tl_table *table;
   };
 } tl_obj_ptr;
 
@@ -165,6 +179,8 @@ typedef struct tl_init_opts {
   int flags;
   unsigned int stack_size, stack_cur;
   tl_obj_ptr *stack_preinit;
+  unsigned int rstack_size, rstack_cur;
+  struct tl_ret *rstack_preinit;
   void *alloc; // allocator ptr
   const tl_alloc_vt *alloc_vt;
 } tl_init_opts;
@@ -172,6 +188,19 @@ typedef struct tl_init_opts {
 typedef struct tl_gc {
   int pass;
 } tl_gc;
+
+typedef enum tl_ret_type {
+  tlrInterpret,
+  tlrBytecode,
+  tlrUser,
+  tlrRet,
+} tl_ret_type;
+
+typedef struct tl_ret {
+  tl_ret_type t;
+  tl_obj_ptr *obj;
+  unsigned long data;
+} tl_ret;
 
 typedef struct tl_state {
   int flags;
@@ -182,6 +211,9 @@ typedef struct tl_state {
 
   unsigned int stack_size, stack_cur;
   tl_obj_ptr *stack;
+
+  unsigned int rstack_size, rstack_cur;
+  tl_ret *rstack;
 
   struct tl_env *top_env;
 } tl_state;
@@ -196,9 +228,12 @@ int tl_destroy(struct tl_state *);
 // if so, TODO: remove GC interacts from raw variants
 
 // Read(parse) the first object of the UTF-8 string 'str' of length 'len'
-// and push it to the top of the stack. If readen_out != NULL, put the
+// into 'ret'. If readen_out != NULL, put the
 // amount of readen characters into it.
-int tl_read_raw(struct tl_state *, const char *str, size_t len,
+// 'ret' may be null.
+// If no object was parsed (whitespace), then '*readen_out' = 0 and '*ret' =
+// NULL
+int tl_read_raw(struct tl_state *, const char *str, size_t len, tl_obj_ptr *ret,
                 size_t *readen_out);
 // Evaluate 'obj' into 'ret'
 int tl_eval_raw(struct tl_state *, tl_obj_ptr obj, tl_obj_ptr *ret);
@@ -206,6 +241,9 @@ int tl_eval_raw(struct tl_state *, tl_obj_ptr obj, tl_obj_ptr *ret);
 int tl_read(struct tl_state *);
 // Pop the top stack object and evaluate it using tl_eval_raw
 int tl_eval(struct tl_state *);
+
+// Pop the last return object from the return stack and run it
+int tl_run(struct tl_state *);
 
 int tl_run_func(struct tl_state *, tl_func *func);
 int tl_run_ufunc(struct tl_state *, tl_user_func *ufunc);
@@ -237,6 +275,7 @@ int tl_env_remove(struct tl_state *, struct tl_env *, tl_symbol *key,
                   tl_env_bucket **out);
 int tl_env_get(struct tl_state *, struct tl_env *, tl_symbol *key,
                tl_env_bucket **out);
+// Try getting env[key] but only in 'env', without searching in parents
 int tl_env_get_here(struct tl_state *, struct tl_env *, tl_symbol *key,
                     tl_env_bucket **out);
 int tl_env_set(struct tl_state *, struct tl_env *, tl_symbol *key,

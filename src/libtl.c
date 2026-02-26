@@ -71,6 +71,8 @@ int tl_init(struct tl_state *s, tl_init_opts *opts) {
     s->stack = stack;
   }
 
+  // TODO: return stack init
+
   return 0;
 }
 
@@ -247,7 +249,7 @@ int tl_gc_unregister(struct tl_state *s, tl_obj_ptr obj) { return 0; }
 // TODO: 2.5) maybe token parsing first?
 // TODO: 3) syntax extensibility from outside (C) and inside (TL)
 int tl_read_raw(struct tl_state *s, const char *str, size_t len,
-                size_t *readen_out) {
+                tl_obj_ptr *ret, size_t *readen_out) {
   // TODO: line, number indicator in errors
   // TODO: 'quote, `semiquote, ,unquote; ,@splice-unquote
   tl_node *nodes[64]; // TODO: fix nodes parse depth, temp solution
@@ -277,7 +279,8 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
   // Do we have an object ready in to_append?
   char append = 0;
   // Is the object in to_append allocated (not constant)?
-  char allocated = 0;
+  // char allocated = 0;
+  char appended = 0;
 
   tl_obj_ptr to_append;
 
@@ -286,15 +289,13 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
     label_append: // for finishing
 
       if (depth == 0) {
-        if (allocated && tl_gc_register(s, to_append)) {
-          goto on_fatal;
-        }
-        if (tl_stack_push(s, to_append)) {
-          if (allocated)
-            tl_gc_unregister(s, to_append); // shouldn't fail
-          goto on_fatal;
-        }
-        allocated = 0;
+        /* if (allocated && tl_gc_register(s, to_append)) { */
+        /*   goto on_fatal; */
+        /* } */
+        if (ret)
+          *ret = to_append;
+        appended = 1;
+        // allocated = 0;
         append = 0;
         break;
       }
@@ -408,7 +409,7 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
       }
 
       flag = 0;
-      allocated = 1;
+      // allocated = 1;
       append = 1;
       i--;
 
@@ -423,7 +424,7 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
       // str[temp:i] is a String contents
       flag = 0;
       append = 1;
-      allocated = 1;
+      // allocated = 1;
 
       size_t len = i - temp;
 
@@ -624,7 +625,7 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
 
       if (depth == 0) {
         to_append = (tl_obj_ptr){.t = tltNode, .node = node_top};
-        allocated = 1;
+        // allocated = 1;
         append = 1;
         /* if (node_top->head.t == tltNil) { */
         /*   tl_dlog("tl_read_raw met a '()' (empty list), which is
@@ -685,6 +686,14 @@ int tl_read_raw(struct tl_state *s, const char *str, size_t len,
     goto label_append;
   }
 
+  if (!appended) {
+    if (readen_out)
+      *readen_out = 0;
+    if (ret)
+      *ret = tlNil;
+    return 0;
+  }
+
   if (readen_out) {
     *readen_out = i;
   }
@@ -702,17 +711,14 @@ on_fatal:
   return -1;
 }
 
-int tl_read(struct tl_state *s) { return 0; }
-
-// Two actual forms: function run, macro run
-// All 'special forms' are macro runs (usually user functions)
-inline static int _tl_eval_node(struct tl_state *s, tl_node *node,
-                                tl_obj_ptr *ret) {
+int tl_read(struct tl_state *s) {
+  // TODO: implement tl_read
   return 0;
 }
 
 inline static int _tl_eval_sym(struct tl_state *s, tl_symbol *sym,
                                tl_obj_ptr *ret) {
+  // TODO:
   return 0;
 }
 
@@ -731,7 +737,9 @@ int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
       *ret = obj;
     break;
   case tltNode:
-    return _tl_eval_node(s, obj.node, ret);
+    // Two actual forms: function run, macro run
+    // All 'special forms' are macro runs (usually user functions)
+    return 0;
   case tltSymbol:
     return _tl_eval_sym(s, obj.sym, ret);
   default:
@@ -742,7 +750,10 @@ int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
   return 0;
 }
 
-int tl_eval(struct tl_state *s) { return 0; }
+int tl_eval(struct tl_state *s) {
+  // TODO:
+  return 0;
+}
 
 // Jenkin's one_at_a_time (Bob Jenkins)
 unsigned long _tl_hash_func(const char *cstr, unsigned long len) {
@@ -784,7 +795,6 @@ int tl_env_insert(struct tl_state *s, struct tl_env *e, tl_symbol *key,
     if (to_out) { // if an equivalent bucket is found, just replace the value
       if (to_out->val.t == val.t && to_out->val.user_ptr == val.user_ptr)
         return 0;
-      return 0;
       if (tl_gc_unregister(
               s, to_out->val)) { // does nothing if 'val' isn't registered
         // ^ we have to call unreg because 'out' is NULL (cant return to the

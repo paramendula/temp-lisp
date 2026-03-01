@@ -56,6 +56,25 @@ const char *tlaux_type_to_str(tl_obj_type t) {
   }
 }
 
+const char *tlaux_ret_type_to_str(tl_ret_type t) {
+  switch (t) {
+  case tlrInterpret:
+    return "Interpret";
+  case tlrInterCheck:
+    return "InterCheck";
+  case tlrRet:
+    return "Ret";
+  case tlrBytecode:
+    return "Bytecode";
+  case tlrFunc:
+    return "Func";
+  case tlrUser:
+    return "User";
+  default:
+    return "!!RET:UNKNOWN!!";
+  }
+}
+
 int _tlaux_print_obj(tl_obj_ptr obj, int ident, FILE *stream, char top) {
   /* if (!top) { */
   /*   for (int i = 0; i < ident; i++) */

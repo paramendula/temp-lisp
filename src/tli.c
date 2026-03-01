@@ -12,6 +12,7 @@ int main(int argc, char **argv) {
   tl_init_opts opts = {
       .alloc_vt = &TLAUX_C_ALLOCATOR_VT,
       .stack_size = 256,
+      .rstack_size = 128,
   };
 
   if (tl_init(&tls, &opts)) {

@@ -42,7 +42,13 @@ int tl_init(struct tl_state *s, tl_init_opts *opts) {
     return -1;
   }
 
+  if (opts->rstack_size == 0) {
+    tl_dlog("Return stack size can't be 0.");
+    return -1;
+  }
+
   s->stack_size = opts->stack_size;
+  s->rstack_size = opts->rstack_size;
 
   if (opts->stack_preinit) {
     s->stack = opts->stack_preinit;
@@ -71,7 +77,32 @@ int tl_init(struct tl_state *s, tl_init_opts *opts) {
     s->stack = stack;
   }
 
-  // TODO: return stack init
+  if (opts->rstack_preinit) {
+    s->rstack = opts->rstack_preinit;
+    s->rstack_cur = opts->rstack_cur;
+  } else {
+    if (!s->alloc_vt->alloc) {
+      tl_dlog("Can't allocate the return stack: allocator's alloc() and "
+              "opts->rstack_preinit are both NULL.");
+      return -1;
+    }
+
+    if (opts->rstack_cur) {
+      tl_dlog("Options' rstack_cur != 0 while stack_preinit == NULL");
+      return -1;
+    }
+
+    tl_ret *rstack = s->alloc_vt->alloc(s->alloc, tlatRStack,
+                                        opts->rstack_size * sizeof(*rstack));
+
+    if (!rstack) {
+      tl_dlog("Couldn't allocate the return stack (NULL returned, NEM?).");
+      return -1;
+    }
+
+    s->rstack_cur = 0;
+    s->rstack = rstack;
+  }
 
   return 0;
 }
@@ -95,9 +126,11 @@ int tl_destroy(struct tl_state *s) {
     if (!s->alloc_vt->free) {
       tl_dlog("Can't free the memory: allocator's free() is NULL.");
     } else {
-      // free the stack
+      // free the stacks
       s->alloc_vt->free(s->alloc, tlatStack, s->stack);
+      s->alloc_vt->free(s->alloc, tlatRStack, s->rstack);
 
+      // TODO: free all GC objects
       tl_dlog("Manual free not implemented yet.");
     }
   }
@@ -158,6 +191,54 @@ int tl_stack_push(struct tl_state *s, tl_obj_ptr obj) {
   tlaux_print_obj(obj, 2, stderr);
   fputc('\n', stderr);
   tl_dlog("--");
+#endif
+
+  return 0;
+}
+
+int tl_rstack_pop(struct tl_state *s, tl_ret *ret) {
+  if (s->rstack_cur == 0) {
+    tl_dlog("Tried to tl_rstack_pop an empty rstack.");
+    return -1;
+  }
+
+  s->rstack_cur -= 1;
+
+#if TL_DEBUG != 0 && TL_DEBUG_RSTACK != 0
+  tl_ret obj = s->rstack[s->rstack_cur];
+  tl_dlog("R. popped %s [%u/%u]:", tlaux_ret_type_to_str(obj.t), s->rstack_cur,
+          s->rstack_size);
+#endif
+
+  *ret = s->rstack[s->rstack_cur];
+
+  return 0;
+}
+
+int tl_rstack_peek(struct tl_state *s, tl_ret *ret) {
+  if (s->rstack_cur == 0) {
+    tl_dlog("Tried to tl_rstack_peek into an empty rstack.");
+    return -1;
+  }
+
+  *ret = s->rstack[s->rstack_cur - 1];
+
+  return 0;
+}
+
+int tl_rstack_push(struct tl_state *s, tl_ret obj) {
+  if (s->rstack_cur == s->rstack_size) {
+    tl_dlog("Tried to tl_rstack_push into a full rstack: [%u/%u].",
+            s->rstack_cur, s->rstack_size);
+    return -1;
+  }
+
+  s->rstack[s->rstack_cur] = obj;
+  s->rstack_cur++;
+
+#if TL_DEBUG != 0 && TL_DEBUG_RSTACK != 0
+  tl_dlog("R. Appended %s [%u/%u]:", tlaux_ret_type_to_str(obj.t),
+          s->rstack_cur, s->rstack_size);
 #endif
 
   return 0;
@@ -716,14 +797,23 @@ int tl_read(struct tl_state *s) {
   return 0;
 }
 
+inline static int _tl_eval_node(struct tl_state *s, tl_node *n,
+                                tl_obj_ptr *ret) {
+  // TODO:
+  // if empty, error
+  // if non-nil tailed, error
+  // otherwise append tlrInterCheck
+  // then append tlrInterpret with head
+  return 0;
+}
+
 inline static int _tl_eval_sym(struct tl_state *s, tl_symbol *sym,
                                tl_obj_ptr *ret) {
   // TODO:
   return 0;
 }
 
-// TODO: make not C-stack dependent
-int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
+int _tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
   switch (obj.t) {
     // Constants(literals) evaluate to themselves
   case tltNil:
@@ -739,7 +829,7 @@ int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
   case tltNode:
     // Two actual forms: function run, macro run
     // All 'special forms' are macro runs (usually user functions)
-    return 0;
+    return _tl_eval_node(s, obj.node, ret);
   case tltSymbol:
     return _tl_eval_sym(s, obj.sym, ret);
   default:
@@ -747,6 +837,96 @@ int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
             tlaux_type_to_str(obj.t));
     return -1;
   }
+  return 0;
+}
+
+int tl_eval_raw(struct tl_state *s, tl_obj_ptr obj, tl_obj_ptr *ret) {
+  if (tl_rstack_push(
+          s, (tl_ret){.t = tlrRet,
+                      .ret = {.out = ret, .stack_offset = s->stack_cur}})) {
+    tl_dlog("tl_eval_raw: tl_rstack_push returned non-zero");
+    return -1;
+  }
+  if (tl_rstack_push(s, (tl_ret){.t = tlrInterpret,
+                                 .inter = {.obj = &obj, .parent = NULL}})) {
+    tl_dlog("tl_eval_raw: tl_rstack_push returned non-zero (2)");
+    return -1;
+  }
+  if (tl_run(s)) {
+    tl_dlog("tl_eval_raw: tl_run returned non-zero");
+    return -1;
+  }
+  return 0;
+}
+
+int tl_run(struct tl_state *s) {
+  tl_ret ret;
+  tl_obj_ptr obj;
+
+  while (s->rstack_size) {
+    if (tl_rstack_pop(s, &ret)) {
+      tl_dlog("tl_run: tl_rstack_pop returned non-zero");
+      return -1;
+    }
+
+    switch (ret.t) {
+    case tlrInterpret:
+      if (_tl_eval_raw(s, *ret.inter.obj, &obj)) {
+        tl_dlog("tl_run: _tl_eval_raw returned non-zero");
+        return -1;
+      }
+      if (tl_stack_push(s, obj)) {
+        // TODO: free obj?
+        tl_dlog("tl_run: tl_stack_push returned non-zero (tlrInterpret)");
+        return -1;
+      }
+      break;
+    case tlrInterCheck:
+      // TODO:
+      // check top stack
+      // if function, append tlrFunc
+      // then append tlrInterpret with head of rest, and rest as parent
+      // if macro, append tlrFunc
+      // then copy all heads from rest onto the stack
+      break;
+    case tlrFunc:
+      // TODO:
+      // check if args count is valid
+      // set args_count
+      // make new env
+      // map args to params
+      // if not bytecode
+      // append tlrInterpret with items head and items tail (must be node) as
+      // parent
+      // if bytecode append tlrBytecode
+      break;
+    case tlrRet:
+      if (s->stack_cur <= ret.ret.stack_offset) {
+        *(ret.ret.out) = tlNil;
+      } else {
+        *(ret.ret.out) = s->stack[ret.ret.stack_offset];
+#if TL_DEBUG != 0 && TL_DEBUG_STACK != 0
+        tl_dlog("Popped %u values [%u/%u] (tlrRet)",
+                s->stack_cur - ret.ret.stack_offset, ret.ret.stack_offset,
+                s->stack_size);
+#endif
+        s->stack_cur = ret.ret.stack_offset;
+      }
+      return 0;
+    case tlrUser:
+      // TODO:
+      // set args_count
+      // call user func
+      break;
+    case tlrBytecode:
+      tl_dlog("tl_run: tlrBytecode not implemented yet");
+      return -1;
+    default:
+      tl_dlog("tl_run: unknown ret type: %d\n", ret.t);
+      return -1;
+    }
+  }
+
   return 0;
 }
 

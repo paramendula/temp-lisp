@@ -10,6 +10,8 @@
 // ^ typedef uintmax_t cell;
 // TODO: refactor all struct names and functions
 // TODO: error handling (raise?)
+// TODO: complex refactoring of parsing and evaluation
+// TODO: make TL_DEBUG_* definitions dependent on each other
 // TODO: move project-wide TODO to another file...
 
 // TODO: divide libht into separate files (modularity):
@@ -17,13 +19,14 @@
 // * libtleval
 // * libtlenv
 // * libtltable
-// * libtlexec ??
+// * libtlexec ?? vm? for bytecode funcs
 // ...
 
 // Config     ---
 #define TL_DEBUG 1
 #define TL_DEBUG_LOG 1
 #define TL_DEBUG_STACK 1
+#define TL_DEBUG_RSTACK 1
 // Config End ---
 
 // allocator's destroy() frees all its memory (used in tl_destroy)
@@ -37,7 +40,7 @@
 typedef int tl_bool;
 
 // constants for tl_bool
-#define TL_TRUE ((tl_bool)INT_MAX)
+#define TL_TRUE ((tl_bool)INT_MAX) // just like in Forth
 #define TL_FALSE ((tl_bool)0)
 
 typedef uint32_t tl_uchar;
@@ -97,13 +100,20 @@ typedef enum tl_bytecode {
   // TODO: bytecode
 } tl_bytecode;
 
+typedef struct tl_func_param {
+  struct tl_func_param *next;
+  tl_str *name;
+} tl_func_param;
+
 typedef struct tl_func {
   struct tl_env *env;
+  tl_func_param *first_param;
+  tl_str *rest_param;
   char is_bytecode;
   unsigned long bc_len;
   union {
     char *bytecode;
-    struct tl_node *first_node;
+    struct tl_node *items;
   };
 } tl_func;
 
@@ -190,16 +200,42 @@ typedef struct tl_gc {
 } tl_gc;
 
 typedef enum tl_ret_type {
-  tlrInterpret,
-  tlrBytecode,
-  tlrUser,
-  tlrRet,
+  tlrInterpret,  // object eval, usually from tl_eval
+  tlrBytecode,   // bytecode run
+  tlrFunc,       // function call
+  tlrUser,       // user (C) function call
+  tlrRet,        // stop TL (return from tl_run)
+  tlrInterCheck, // check node's head evaluation result (run or error)
 } tl_ret_type;
 
+// TODO: more metadata
 typedef struct tl_ret {
   tl_ret_type t;
-  tl_obj_ptr *obj;
-  unsigned long data;
+  union {
+    struct {
+      tl_obj_ptr *obj;
+      tl_node *parent;
+    } inter;
+    struct {
+      tl_node *rest;
+    } inter_check;
+    struct {
+      tl_func *f;
+      unsigned long stack_offset; // for calculating args count
+    } func;
+    struct {
+      tl_func *f;
+      unsigned long offset;
+    } bc;
+    struct {
+      tl_ufunc_wrap *u;
+      unsigned long stack_offset;
+    } user;
+    struct {
+      tl_obj_ptr *out;
+      unsigned long stack_offset;
+    } ret;
+  };
 } tl_ret;
 
 typedef struct tl_state {
@@ -215,6 +251,8 @@ typedef struct tl_state {
   unsigned int rstack_size, rstack_cur;
   tl_ret *rstack;
 
+  int args_count; // for function calls
+
   struct tl_env *top_env;
 } tl_state;
 
@@ -223,44 +261,63 @@ int tl_init(struct tl_state *, tl_init_opts *opts);
 // Deinitialize TL, freeing all memory (if possible)
 int tl_destroy(struct tl_state *);
 
-// TODO: are non-raw function variants needed?
-// ^ maybe raw variants DON'T interact with GC!
-// if so, TODO: remove GC interacts from raw variants
-
 // Read(parse) the first object of the UTF-8 string 'str' of length 'len'
-// into 'ret'. If readen_out != NULL, put the
+// into '*ret'. If readen_out != NULL, put the
 // amount of readen characters into it.
 // 'ret' may be null.
-// If no object was parsed (whitespace), then '*readen_out' = 0 and '*ret' =
-// NULL
+// If no object was parsed (whitespace met only), then '*readen_out' = 0 and
+// '*ret' = NULL.
+// If an object was parsed, it's NOT automatically registered in
+// the GC.
 int tl_read_raw(struct tl_state *, const char *str, size_t len, tl_obj_ptr *ret,
                 size_t *readen_out);
-// Evaluate 'obj' into 'ret'
+// Evaluate 'obj' into 'ret'.
+// The resulting object IS registered in the GC.
+// Calls tl_run.
+// TODO: current limitation: only one return value possible
 int tl_eval_raw(struct tl_state *, tl_obj_ptr obj, tl_obj_ptr *ret);
-// Pop the top stack string and read(parse) it using tl_read_raw
+// Pop the top stack string and read(parse) it using tl_read_raw.
+// Then push the output object onto the stack. The object is registered in the
+// GC.
 int tl_read(struct tl_state *);
-// Pop the top stack object and evaluate it using tl_eval_raw
+// Pop the top stack object and evaluate it using tl_eval_raw.
+// Then push the output object (eval result) onto the stack.
+// The resulting object is registered in the GC.
+// Calls tl_run.
 int tl_eval(struct tl_state *);
 
-// Pop the last return object from the return stack and run it
+// Pop the last return object (tl_ret) from the return stack and run it.
 int tl_run(struct tl_state *);
 
+// Push arguments onto the stack to pass them to the func.
+// Calls tl_run.
 int tl_run_func(struct tl_state *, tl_func *func);
-int tl_run_ufunc(struct tl_state *, tl_user_func *ufunc);
+// Push arguments onto the stack to pass them to the user func.
+// Calls tl_run.
+int tl_run_ufunc(struct tl_state *, tl_ufunc_wrap *ufunc);
 
 int tl_stack_pop(struct tl_state *, tl_obj_ptr *ret);
 // Just like tl_stack_pop but without actually deleting the value from the stack
 int tl_stack_peek(struct tl_state *, tl_obj_ptr *ret);
 int tl_stack_push(struct tl_state *, tl_obj_ptr obj);
 
+int tl_rstack_pop(struct tl_state *, tl_ret *ret);
+// Just like tl_rstack_pop but without actually deleting the value from the
+// return stack
+int tl_rstack_peek(struct tl_state *, tl_ret *ret);
+int tl_rstack_push(struct tl_state *, tl_ret obj);
+
 // Insert an object pointer into GC, making it managed memory
 int tl_gc_register(struct tl_state *, tl_obj_ptr obj);
 // Remove an object from GC, stopping it from being managed memory.
 // If obj isn't gc registered, the function does nothing.
 int tl_gc_unregister(struct tl_state *, tl_obj_ptr obj);
-// Mark all inaccessible objects (starting from 'env' ending with top env)
+// Mark all accessible objects to escape deletion.
+// Object is accessible if you can access it while traversing:
+// Stack and Return Stack, Top Env.
+// Traversing the return stack also means traversing related local environments.
 int tl_gc_mark(struct tl_state *, struct tl_env *env);
-// Free all inaccessible objects and remove them from GC
+// Free all inaccessible (unmarked) objects and remove them from GC
 int tl_gc_sweep(struct tl_state *);
 
 // returns 0 if equal, both may be NULL
@@ -268,7 +325,7 @@ int tl_str_cmp(tl_str *lhs, tl_str *rhs);
 
 // TODO: tl_env_* description
 
-// gc register obj before calling this func
+// Beware: neither key nor val are automatically GC registered.
 int tl_env_insert(struct tl_state *, struct tl_env *, tl_symbol *key,
                   tl_obj_ptr val, tl_env_bucket **out);
 int tl_env_remove(struct tl_state *, struct tl_env *, tl_symbol *key,
@@ -283,6 +340,7 @@ int tl_env_set(struct tl_state *, struct tl_env *, tl_symbol *key,
 
 // TODO: tl_table_* description
 
+// Objects that can server as table keys
 #define TL_TABLE_CAN_KEY(t)                                                    \
   ((t) == tltString || (t) == tltSymbol || (t) == tltChar ||                   \
    (t) == tltInteger || (t) == tltUInteger || (t) == tltBool)
